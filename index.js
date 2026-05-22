@@ -4,7 +4,7 @@ const app = express();
 app.use(express.json());
 
 const CONFIG = {
-  claudeKey:   process.env.CLAUDE_API_KEY   || '',
+  claudeKey:   process.env.CLAUDE_API_KEY    || '',
   zapiId:      process.env.ZAPI_INSTANCE_ID  || '',
   zapiToken:   process.env.ZAPI_TOKEN        || '',
   zapiClient:  process.env.ZAPI_CLIENT_TOKEN || '',
@@ -40,17 +40,13 @@ CARPETES:
 - Carpete Âncora 3090C: R$1.350
 - Carpete Âncora Vortex 3090V: R$1.385
 - Carpete Âncora Draga 3090D: R$1.565
-- GoldMoss 1x1m: R$395
-- GoldMoss 30cmx1m: R$165
-- GoldMoss 50cmx1m Kit: R$245
-- GoldMoss 1x12m Rolo: R$3.960
+- GoldMoss 1x1m: R$395 | 30cmx1m: R$165 | 50cmx1m Kit: R$245 | 1x12m Rolo: R$3.960
 - Carpete Vinílico Resinado 1x1m: R$295
 - Kit GoldMoss 30cm + Resinado + Tela: R$195
 
 PAGAMENTO E ENTREGA:
 - À vista, 50% entrada + 50% entrega, parcelado
-- Entrega para todo o Brasil
-- Prazo: 30 a 90 dias úteis conforme modelo
+- Entrega para todo o Brasil, prazo 30-90 dias úteis
 - Suporte técnico incluso
 `;
 
@@ -63,7 +59,7 @@ REGRAS:
 - Mensagens curtas e diretas — máximo 3 parágrafos
 - Use emojis com moderação (1-2 por mensagem)
 - Nunca invente preços — use apenas os do knowledge base
-- Quando tiver nome + email + telefone + estado + produto de interesse do cliente, responda com JSON:
+- Quando tiver nome + email + telefone + estado + produto de interesse, responda com JSON:
   {"ACTION":"SAVE_LEAD","nome":"...","email":"...","tel":"...","estado":"...","produto":"...","mensagem":"..."}
 
 FLUXO:
@@ -115,17 +111,17 @@ async function sendWpp(phone, message) {
     return;
   }
 
-  // Limpa o número — apenas dígitos
   const cleanPhone = phone.replace(/\D/g, '');
+  const url = `https://api.z-api.io/instances/${CONFIG.zapiId}/token/${CONFIG.zapiToken}/send-text`;
 
   const headers = { 'Content-Type': 'application/json' };
-  if (CONFIG.zapiClient) headers['client-token'] = CONFIG.zapiClient;
+  if (CONFIG.zapiClient) headers['Client-Token'] = CONFIG.zapiClient;
 
-  await axios.post(
-    `https://api.z-api.io/instances/${CONFIG.zapiId}/token/${CONFIG.zapiToken}/send-text`,
-    { phone: cleanPhone, message },
-    { headers }
-  );
+  console.log('[SENDING TO]', url);
+  console.log('[PHONE]', cleanPhone);
+
+  const resp = await axios.post(url, { phone: cleanPhone, message }, { headers });
+  console.log('[SEND OK]', resp.data);
 }
 
 async function saveLead(data) {
@@ -135,25 +131,12 @@ async function saveLead(data) {
     await axios.post(
       `${CONFIG.supabaseUrl}/rest/v1/orcamentos`,
       {
-        numero: num,
-        cliente_nome: data.nome,
-        cliente_email: data.email,
-        cliente_tel: data.tel,
-        cliente_estado: data.estado,
-        produtos: [{ nome: data.produto }],
-        obs: data.mensagem,
-        total: 0,
-        status: 'pendente',
-        enviado_wpp: true
+        numero: num, cliente_nome: data.nome, cliente_email: data.email,
+        cliente_tel: data.tel, cliente_estado: data.estado,
+        produtos: [{ nome: data.produto }], obs: data.mensagem,
+        total: 0, status: 'pendente', enviado_wpp: true
       },
-      {
-        headers: {
-          'apikey': CONFIG.supabaseKey,
-          'Authorization': `Bearer ${CONFIG.supabaseKey}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
-        }
-      }
+      { headers: { 'apikey': CONFIG.supabaseKey, 'Authorization': `Bearer ${CONFIG.supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' } }
     );
     console.log('[LEAD SAVED]', data.nome, num);
     return num;
@@ -170,19 +153,8 @@ async function notifyEmail(data, numOrc) {
       from: `GoldDog Industries <${CONFIG.emailGD}>`,
       to: [CONFIG.emailGD],
       subject: `🔔 Novo lead WhatsApp — ${data.nome} | ${numOrc}`,
-      html: `<h2>Novo Lead via WhatsApp</h2>
-        <p><b>Nome:</b> ${data.nome}</p>
-        <p><b>E-mail:</b> ${data.email}</p>
-        <p><b>WhatsApp:</b> ${data.tel}</p>
-        <p><b>Estado:</b> ${data.estado}</p>
-        <p><b>Interesse:</b> ${data.produto}</p>
-        <p><b>Nº Orçamento:</b> ${numOrc}</p>`
-    }, {
-      headers: {
-        'Authorization': `Bearer ${CONFIG.resendKey}`,
-        'Content-Type': 'application/json'
-      }
-    });
+      html: `<h2>Novo Lead via WhatsApp</h2><p><b>Nome:</b> ${data.nome}</p><p><b>WhatsApp:</b> ${data.tel}</p><p><b>Interesse:</b> ${data.produto}</p><p><b>Nº:</b> ${numOrc}</p>`
+    }, { headers: { 'Authorization': `Bearer ${CONFIG.resendKey}`, 'Content-Type': 'application/json' } });
   } catch(e) {
     console.error('[EMAIL ERROR]', e.message);
   }
@@ -190,21 +162,14 @@ async function notifyEmail(data, numOrc) {
 
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
-
   try {
     const body = req.body;
-    console.log('[WEBHOOK BODY]', JSON.stringify(body).substring(0, 200));
-
-    // Suporta diferentes formatos do Z-API
     const fromMe = body.fromMe || body.isFromMe || false;
-    const isGroup = body.isGroup || body.chatId?.includes('@g.us') || false;
-    const phone = body.phone || body.from || body.chatId || '';
+    const isGroup = body.isGroup || false;
+    const phone = body.phone || body.from || '';
     const text = body.text?.message || body.text || body.body || body.message || '';
 
-    if (fromMe || isGroup || !phone || !text) {
-      console.log('[SKIP] fromMe:', fromMe, 'isGroup:', isGroup, 'phone:', phone, 'text:', !!text);
-      return;
-    }
+    if (fromMe || isGroup || !phone || !text || typeof text !== 'string') return;
 
     console.log(`[MSG] ${phone}: ${text}`);
 
@@ -217,44 +182,37 @@ app.post('/webhook', async (req, res) => {
 
     let finalReply = reply;
     try {
-      const jsonMatch = reply.match(/\{"ACTION":"SAVE_LEAD".*?\}/s);
+      const jsonMatch = reply.match(/\{"ACTION":"SAVE_LEAD"[\s\S]*?\}/);
       if (jsonMatch && !session.leadSaved) {
         const leadData = JSON.parse(jsonMatch[0]);
         session.leadSaved = true;
         const numOrc = await saveLead(leadData);
         if (numOrc) await notifyEmail(leadData, numOrc);
         finalReply = reply.replace(jsonMatch[0], '').trim();
-        if (!finalReply) {
-          finalReply = `✅ Orçamento *Nº ${numOrc}* registrado! Nossa equipe entrará em contato em breve. 🐕`;
-        }
+        if (!finalReply) finalReply = `✅ Orçamento *Nº ${numOrc}* registrado! Nossa equipe entrará em contato em breve. 🐕`;
       }
     } catch(e) { /* not a lead action */ }
 
     await sendWpp(phone, finalReply);
-    console.log(`[REPLY] ${phone}: ${finalReply.substring(0, 100)}`);
+    console.log(`[REPLY SENT] ${phone}`);
 
   } catch(e) {
-    console.error('[WEBHOOK ERROR]', e.message);
+    console.error(`[WEBHOOK ERROR] ${e.message} | ${JSON.stringify(e.response?.data)}`);
   }
 });
 
 app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    agent: 'GoldDog WhatsApp Agent',
-    version: '1.1.0',
-    sessions: sessions.size,
-    time: new Date().toISOString()
-  });
+  res.json({ status: 'online', agent: 'GoldDog WhatsApp Agent', version: '1.2.0', sessions: sessions.size, time: new Date().toISOString() });
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🐕 GoldDog Agent v1.1.0 rodando na porta ${PORT}`);
+  console.log(`🐕 GoldDog Agent v1.2.0 rodando na porta ${PORT}`);
   console.log(`Claude:   ${CONFIG.claudeKey ? '✅' : '❌'}`);
   console.log(`Z-API:    ${CONFIG.zapiId ? '✅' : '❌'}`);
+  console.log(`Client-Token: ${CONFIG.zapiClient ? '✅' : '⚠️ não configurado'}`);
   console.log(`Supabase: ${CONFIG.supabaseUrl ? '✅' : '❌'}`);
   console.log(`Resend:   ${CONFIG.resendKey ? '✅' : '❌'}`);
 });
